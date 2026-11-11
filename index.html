@@ -122,7 +122,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";");
 const hex=s=>Array.from(new TextEncoder().encode(s.toLowerCase())).map(b=>b.toString(16).padStart(2,"0")).join("");
 const to=(p,ms=4000)=>Promise.race([p,new Promise((_,j)=>setTimeout(j,ms))]);
 let DB=null,ACC=null,AID="",NICK="",aerr="",sv,PL=[];
-try{NICK=localStorage.getItem("depai_u")||""}catch(e){}
+NICK="";
 const MEM={};
 const pack=a=>({nick:a.nick,pass:a.pass,banned:a.banned||0,bal:Math.round((a.s&&a.s.bal)||0),t:a.t||0,sj:JSON.stringify(a.s||{})});
 const unpack=d=>{d=JSON.parse(JSON.stringify(d));let s=d.s||{};if(d.sj){try{s=JSON.parse(d.sj)}catch(e){}}return{nick:d.nick,pass:d.pass,banned:d.banned||0,t:d.t||0,s}};
@@ -139,9 +139,9 @@ async function putAcc(id,a){MEM[id]=a;try{localStorage.setItem("acc:"+id,JSON.st
 function loadS(o){["bg","bt","pn"].forEach(k=>{for(const n in ITEMS[k])if(ITEMS[k][n].img)delete ITEMS[k][n]});
  S=Object.assign(FRESH(),JSON.parse(JSON.stringify(o||{})));S.skins.forEach(k=>ITEMS[k.t][k.n]={c:k.c,r:"mythic",p:0,img:k.d});
  ["bg","bt","pn"].forEach(k=>{if(!ITEMS[k][S[k]])S[k]=k=="bt"||k=="pn"?"Стандартный":"Темный"});apply()}
-function login(id,a){ACC=a;AID=id;NICK=a.nick;try{localStorage.setItem("depai_u",a.nick)}catch(e){}
- loadS(a.s);aerr="";scr="main";st="bet";modal=null;bet=S.bal>=100?100:~~S.bal;if(S.bal<=0)modal="loan";render()}
-function logout(){save();clearTimeout(sv);cloud();NICK="";try{localStorage.removeItem("depai_u")}catch(e){}ACC=null;modal=null;st="bet";scr="auth";render()}
+function login(id,a){ACC=a;AID=id;NICK=a.nick;
+ loadS(a.s);aerr="";scr="main";st="bet";modal=null;adminModal=null;bet=S.bal>=100?100:~~S.bal;if(S.bal<=0)modal="loan";render()}
+function logout(){save();clearTimeout(sv);cloud();NICK="";ACC=null;AID="";modal=null;adminModal=null;st="bet";scr="auth";aerr="";adminUnlocked=false;render()}
 async function authGo(create){
  const n=$("#an").value.trim(),p=$("#ap").value,err=m=>{aerr=m;auth(n)};
  if(!/^[\p{L}\p{N}_\- ]{2,16}$/u.test(n))return err("Ник: 2–16 символов, буквы и цифры");
@@ -151,25 +151,173 @@ async function authGo(create){
  else{if(!a||a.pass!==p)return err("Неверный ник или пароль");if(a.banned)return err("Аккаунт заблокирован")}
  await putAcc(id,a);login(id,a)}
 function auth(n){
- $("#app").innerHTML=`<div class="p big" style="color:#ffc864;margin-top:30px">🎲 ДЭПАЙ</div>
+ $("#app").innerHTML=`
  <div class="p" style="display:flex;flex-direction:column;gap:10px"><div>Введите ник и пароль</div>
  <input id="an" maxlength="16" placeholder="Ник" autocomplete="username" autocapitalize="none" style="letter-spacing:0" value="${esc(n||"")}">
  <input id="ap" type="password" maxlength="24" placeholder="Пароль" autocomplete="current-password" style="letter-spacing:0">
  ${aerr?`<div style="color:#f77;font-weight:700">${aerr}</div>`:""}
  <button class="b k" onclick="authGo(0)">Войти</button><button class="b" onclick="authGo(1)">Создать аккаунт</button></div>`}
-async function loadPL(){const m=new Map();
- try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith("acc:")){const a=JSON.parse(localStorage.getItem(k));if(a&&a.nick)m.set(k.slice(4),{id:k.slice(4),a,src:"📱"})}}}catch(e){}
- if(DB){try{const q=await to(DB.collection("players").get());q.docs.forEach(d=>m.set(d.id,{id:d.id,a:unpack(d.data()),src:"☁"}))}catch(e){}}
- PL=[...m.values()].sort((x,y)=>(y.a.t||0)-(x.a.t||0))}
-function plr(){$("#app").innerHTML=`<div class="p">Загрузка…</div>`;loadPL().then(()=>{if(scr!="plr")return;
- $("#app").innerHTML=`<div class="p big" style="color:#ffc864">👥 Игроки</div><div class="p">Всего: ${PL.length} · ☁ общие, 📱 только на этом устройстве</div>
- <div>${PL.map((p,i)=>`<div class="pl" style="background:${p.a.banned?"#3c2828":"#283c28"};gap:6px;align-items:center"><span>${p.src} <b>${esc(p.a.nick)}</b></span><span style="color:#ffdc64">${esc(p.a.pass)}</span><span>${f((p.a.s&&p.a.s.bal)||0)}</span><button class="b s ${p.a.banned?"k":"r"}" style="flex:0 0 auto" onclick="ban(${i})">${p.a.banned?"Разбанить":"Бан"}</button></div>`).join("")||`<div class="p">Пока никого</div>`}</div>
- <button class="b" onclick="scr='admin';render()">Назад</button>`})}
-async function ban(i){const p=PL[i];if(p.id==AID){toast("Себя банить нельзя");return}
+/* ---- список игроков ---- */
+let adminUnlocked=false,giftTarget=null,giftCat="bg";
+let adminModal=null, amVal="";
+const ADMIN_PASS="22118899BNA22118899BNA";
+async function loadPL(){
+ const m=new Map();
+ for(const id in MEM){const a=MEM[id];if(a&&a.nick)m.set(id,{id,a,src:"🟢"})}
+ try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);
+  if(k&&k.startsWith("acc:")){try{const a=JSON.parse(localStorage.getItem(k));if(a&&a.nick&&!m.has(k.slice(4)))m.set(k.slice(4),{id:k.slice(4),a,src:"📱"})}catch(e){}}}
+ }catch(e){}
+ if(DB){try{const q=await to(DB.collection("players").get());q.docs.forEach(d=>{try{const a=unpack(d.data());if(a&&a.nick)m.set(d.id,{id:d.id,a,src:"☁"})}catch(e){}})}catch(e){}}
+ PL=[...m.values()].sort((x,y)=>(y.a.t||0)-(x.a.t||0));
+}
+function adminpass(){
+ $("#app").innerHTML=`<div class="p big" style="color:#f66">🔒 Пароль админа</div>
+ <div class="p" style="display:flex;flex-direction:column;gap:10px">
+   <div>Введите пароль для доступа к игрокам</div>
+   <input id="apw" inputmode="none" autocomplete="off" autocapitalize="characters" placeholder="пароль" value="">
+   <div class="kp">${"1234567890QWERTYUIOPASDFGHJKLZXCVBNM".split("").map(k=>`<button class="b kk" onclick="apwKp('${k}')">${k}</button>`).join("")}<button class="b kk r" onclick="apwKp('')">⌫</button></div>
+   <button class="b k" onclick="adminAuth()">Войти</button>
+   <button class="b g" onclick="scr='admin';render()">Назад</button>
+ </div>`;
+}
+function apwKp(k){const i=$("#apw");if(!i)return;i.value=k?i.value+k:i.value.slice(0,-1)}
+function adminAuth(){const i=$("#apw");if(!i)return;const v=i.value||"";
+ if(v===ADMIN_PASS){adminUnlocked=true;scr="plr";render()}
+ else{toast("Неверный пароль");i.value=""}}
+function plr(){
+ if(!adminUnlocked){scr="adminpass";render();return}
+ $("#app").innerHTML=`<div class="p">Загрузка…</div>`;
+ loadPL().then(()=>{
+  if(scr!="plr")return;
+  if(AID&&ACC&&!PL.find(p=>p.id==AID))PL.unshift({id:AID,a:ACC,src:"🟢"});
+  const rows=PL.map(p=>{
+   const bal=(p.a.s&&p.a.s.bal)||0;
+   return `<div class="pl" style="background:${p.a.banned?"#3c2828":"#283c28"};flex-direction:column;align-items:stretch;gap:6px">
+     <div style="display:flex;justify-content:space-between;align-items:center">
+       <span>${p.src} <b>${esc(p.a.nick)}</b></span>
+       <span style="color:#ffdc64">${f(bal)}</span>
+     </div>
+     <div style="display:flex;gap:4px;flex-wrap:wrap">
+       <button class="b s k" style="flex:1;min-width:70px" onclick="openMoney('${p.id}')">💰 Деньги</button>
+       <button class="b s" style="flex:1;min-width:70px" onclick="giftSkinOpen('${p.id}')">🎨 Скин</button>
+       <button class="b s" style="flex:1;min-width:70px" onclick="openPass('${p.id}')">🔑 Пароль</button>
+       <button class="b s r" style="flex:1;min-width:70px" onclick="openDel('${p.id}')">🗑 Удалить</button>
+       <button class="b s ${p.a.banned?"k":"r"}" style="flex:1;min-width:70px" onclick="ban('${p.id}')">${p.a.banned?"✅ Разбан":"🚫 Бан"}</button>
+     </div>
+   </div>`}).join("");
+  let html=`<div class="p big" style="color:#ffc864">👥 Игроки</div>
+    <div class="p" style="font-size:13px">Всего: ${PL.length} · ${DB?"☁ база подключена":"⚠ база недоступна"}<br>🟢 сессия · 📱 устройство · ☁ база</div>
+    <div>${rows||`<div class="p">Пока никого</div>`}</div>
+    <button class="b" onclick="scr='admin';render()">Назад</button>`;
+  if(modal==="giftskin")html+=giftskinModal();
+  if(adminModal)html+=adminModalHtml();
+  $("#app").innerHTML=html;
+ }).catch(e=>{
+  $("#app").innerHTML=`<div class="p" style="color:#f77">Ошибка: ${esc(e&&e.message||e)}</div><button class="b" onclick="scr='admin';render()">Назад</button>`;
+ })}
+function giftskinModal(){
+ const p=PL.find(x=>x.id===giftTarget);const items=Object.entries(ITEMS[giftCat]);
+ return `<div class="ov"><div class="p" style="max-height:85vh;overflow:auto;width:100%;max-width:380px">
+   <div class="big" style="color:#ffc864">🎨 Скин для «${esc(p?p.a.nick:"?")}»</div>
+   <div class="tabs">${Object.keys(CATN).map(k=>`<button class="b s ${k==giftCat?"":"g"}" onclick="giftCat='${k}';plr()">${CATN[k]}</button>`).join("")}</div>
+   <div class="grid">${items.map(([n,o])=>`<div class="card" onclick="giftSkinApply('${giftCat}','${n.replace(/'/g,"\\'")}')"><i class="${o.a?"pv-"+o.a:""}" style="--pvc:${fill(o)};background:${fill(o)}"></i><div><b>${esc(n)}</b></div></div>`).join("")}</div>
+   <button class="b g" onclick="modal=null;plr()">Отмена</button>
+ </div></div>`;
+}
+function giftSkinOpen(pid){giftTarget=pid;giftCat="bg";modal="giftskin";plr()}
+async function giftSkinApply(cat,name){
+ const p=PL.find(x=>x.id===giftTarget);if(!p){toast("Игрок не найден");return}
+ if(!ITEMS[cat]||!ITEMS[cat][name]){toast("Не найдено");return}
+ const acc=p.a;if(!acc.s)acc.s=FRESH();
+ if(!acc.s.owned)acc.s.owned=[];
+ const key=cat+":"+name;
+ if(!acc.s.owned.includes(key))acc.s.owned.push(key);
+ acc.s[cat]=name;acc.t=Date.now();
+ await putAcc(p.id,acc);
+ if(p.id===AID){ACC=acc;S=acc.s;apply()}
+ modal=null;toast("✓ "+p.a.nick+" получил «"+name+"»");plr();
+}
+/* ---- встроенные модалки админа (без prompt/confirm) ---- */
+function adminModalHtml(){
+ const p=PL.find(x=>x.id===adminModal.pid);
+ const name=p?esc(p.a.nick):"?";
+ const safe=esc(amVal);
+ if(adminModal.t==="money")return `<div class="ov"><div class="p" style="width:100%;max-width:380px">
+   <div class="big" style="color:#ffdc64">💰 Деньги для «${name}»</div>
+   <div>Сумма</div>
+   <input id="ami" inputmode="none" readonly value="${safe}" style="letter-spacing:2px;font-size:26px">
+   <div class="kp" style="grid-template-columns:repeat(3,1fr);gap:6px">
+    ${"123456789".split("").map(k=>`<button class="b kk" onclick="amKp('${k}')" style="padding:14px 0;font-size:22px">${k}</button>`).join("")}
+    <button class="b kk" onclick="amKp('0')" style="padding:14px 0;font-size:22px">0</button>
+    <button class="b kk r" onclick="amKp('B')" style="padding:14px 0;font-size:22px">⌫</button>
+    <button class="b kk g" onclick="amKp('C')" style="padding:14px 0;font-size:22px">C</button>
+   </div>
+   <div class="row"><button class="b s" onclick="amQuick(1000)">1K</button><button class="b s" onclick="amQuick(10000)">10K</button><button class="b s" onclick="amQuick(100000)">100K</button><button class="b s" onclick="amQuick(1000000)">1M</button></div>
+   <div class="row"><button class="b k" onclick="amOk()">Зачислить</button><button class="b g" onclick="amCancel()">Отмена</button></div>
+ </div></div>`;
+ if(adminModal.t==="pass")return `<div class="ov"><div class="p" style="width:100%;max-width:380px">
+   <div class="big" style="color:#ffdc64">🔑 Новый пароль «${name}»</div>
+   <input id="ami" inputmode="none" readonly value="${safe}" style="letter-spacing:2px;font-size:20px">
+   <div class="kp">${"1234567890QWERTYUIOPASDFGHJKLZXCVBNM".split("").map(k=>`<button class="b kk" onclick="amKp('${k}')">${k}</button>`).join("")}<button class="b kk r" onclick="amKp('B')">⌫</button></div>
+   <div style="font-size:12px;opacity:.7">3–24 символа</div>
+   <div class="row"><button class="b k" onclick="amOk()">Сохранить</button><button class="b g" onclick="amCancel()">Отмена</button></div>
+ </div></div>`;
+ if(adminModal.t==="del")return `<div class="ov"><div class="p" style="width:100%;max-width:380px">
+   <div class="big" style="color:#f66">🗑 Удалить «${name}»?</div>
+   <div>Аккаунт будет удалён навсегда. Отменить нельзя.</div>
+   <div class="row"><button class="b r" onclick="amOk()">Удалить</button><button class="b g" onclick="amCancel()">Отмена</button></div>
+ </div></div>`;
+ return "";
+}
+function openMoney(pid){adminModal={t:"money",pid};amVal="";plr()}
+function openPass(pid){adminModal={t:"pass",pid};amVal="";plr()}
+function openDel(pid){adminModal={t:"del",pid};amVal="";plr()}
+function amCancel(){adminModal=null;amVal="";plr()}
+function amKp(k){
+ if(!adminModal)return;
+ if(k==="C")amVal="";
+ else if(k==="B")amVal=amVal.slice(0,-1);
+ else{
+   if(adminModal.t==="money"){ if(!/^\d$/.test(k))return; if(amVal==="0")amVal=""; amVal=(amVal+k).slice(0,12); }
+   else{ amVal=(amVal+k).slice(0,24); }
+ }
+ const el=$("#ami"); if(el)el.value=amVal;
+}
+function amQuick(n){ if(!adminModal||adminModal.t!=="money")return; amVal=String(Math.max(1,Math.floor(n))); const el=$("#ami"); if(el)el.value=amVal; }
+async function amOk(){
+ const m=adminModal; if(!m)return;
+ const p=PL.find(x=>x.id===m.pid);
+ if(!p){toast("Игрок не найден");adminModal=null;amVal="";plr();return}
+ if(m.t==="money"){
+   const n=Math.floor(+String(amVal).replace(/\D/g,""));
+   if(!isFinite(n)||n<=0){toast("Введи сумму");return}
+   const acc=p.a; if(!acc.s)acc.s=FRESH(); acc.s.bal=(acc.s.bal||0)+n; acc.t=Date.now();
+   await putAcc(p.id,acc);
+   if(p.id===AID){ACC=acc;S=acc.s;apply()}
+   adminModal=null;amVal=""; toast("✓ "+p.a.nick+" +"+f(n)); plr();
+ } else if(m.t==="pass"){
+   if(amVal.length<3||amVal.length>24){toast("3–24 символа");return}
+   const acc=p.a; acc.pass=amVal; acc.t=Date.now(); await putAcc(p.id,acc);
+   if(p.id===AID)ACC=acc;
+   const np=amVal; adminModal=null;amVal=""; toast("🔑 Пароль «"+p.a.nick+"»: "+np); plr();
+ } else if(m.t==="del"){
+   if(p.id===AID){toast("Себя удалить нельзя");adminModal=null;amVal="";plr();return}
+   delete MEM[p.id];
+   try{localStorage.removeItem("acc:"+p.id)}catch(e){}
+   if(DB){try{await to(DB.doc("players/"+p.id).delete())}catch(e){}}
+   adminModal=null;amVal=""; toast("🗑 Удалён: "+p.a.nick); plr();
+ }
+}
+async function ban(pid){
+ const p=PL.find(x=>x.id===pid);if(!p){toast("Игрок не найден");return}
+ if(p.id===AID){toast("Себя банить нельзя");return}
  const nb=p.a.banned?0:1;let ok=false;
+ p.a.banned=nb;
+ if(MEM[p.id])MEM[p.id].banned=nb;
  try{const l=JSON.parse(localStorage.getItem("acc:"+p.id)||"null");if(l){l.banned=nb;localStorage.setItem("acc:"+p.id,JSON.stringify(l));ok=true}}catch(e){}
  if(DB){try{await to(DB.doc("players/"+p.id).update({banned:nb}));ok=true}catch(e){}}
- toast(ok?(nb?"Забанен: ":"Разбанен: ")+p.a.nick:"Не удалось: нет доступа к общей базе");plr()}
+ toast(ok?(nb?"Забанен: ":"Разбанен: ")+p.a.nick:"Не удалось: нет доступа к общей базе");plr();
+}
 async function chk(){if(!DB||!ACC||scr=="coin")return;try{const s=await to(DB.doc("players/"+AID).get());if(s.exists&&s.data().banned){aerr="Аккаунт заблокирован";logout()}}catch(e){}}
 
 S.skins.forEach(k=>ITEMS[k.t][k.n]={c:k.c,r:"mythic",p:0,img:k.d});
@@ -181,7 +329,7 @@ function apply(){const b=MENU?{c:[8,12,30]}:ITEMS.bg[S.bg],r=document.documentEl
  s.background=v;s.imageRendering="pixelated";$("#bgl").style.cssText=`background:${v};image-rendering:pixelated`;
  const bt=MENU?ITEMS.bt["Стандартный"]:ITEMS.bt[S.bt],pn=MENU?ITEMS.pn["Стандартный"]:ITEMS.pn[S.pn];s.setProperty("--btn",fill(bt));s.setProperty("--panel",fill(pn));
  r.dataset.bt=bt.a||"";r.dataset.pn=pn.a||""}
-function toast(t){let e=$("#toast");if(!e){e=document.createElement("div");e.id="toast";document.body.appendChild(e)}e.textContent=t;e.style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display="none",2600)}
+function toast(t){let e=$("#toast");if(!e){e=document.createElement("div");e.id="toast";document.body.appendChild(e)}e.textContent=t;e.style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display="none",3400)}
 /* ---- фоновые частицы ---- */
 const cv=$("#fx"),cx=cv.getContext("2d");let P=[];
 const rs=()=>{cv.width=innerWidth;cv.height=innerHeight};rs();addEventListener("resize",rs);
@@ -224,14 +372,14 @@ function fx(){const a=MENU?"menu":ITEMS.bg[S.bg].a,W=cv.width,H=cv.height,x=R()*
  if(SC[a])SC[a](cx,W,H,performance.now());
  requestAnimationFrame(fx)}
 /* ---- главный экран ---- */
-function render(){const m=scr=="auth";if(m!==MENU){MENU=m;apply()}({main,shop,draw:drawScr,admin,plist,auth,plr})[scr]()}
+function render(){const m=scr=="auth";if(m!==MENU){MENU=m;apply()}({main,shop,draw:drawScr,admin,plist,auth,plr,adminpass})[scr]()}
 function main(){
  const cd=S.admin?0:Math.max(0,3600-(T()-S.tC)),gift=T()-S.tG>=86400,busy=st!="bet",show=st=="show";
  const dv=busy&&!show?[1,1,1]:res;
  $("#app").innerHTML=`
  <div class="p big">Баланс: ${f(S.bal)}</div>
  ${S.debt>0?`<div class="p" style="background:#c89632;color:#222;text-shadow:none;font-weight:700">Долг: ${f(S.debt)} (${S.dp>0?"5% за спин":"20% сразу"})</div>`:""}
- <div class="p big" id="bet">Ставка: ${f(bet)}</div>
+ <div class="p big" id="bet" onclick="openBet()">Ставка: ${f(bet)} ✎</div>
  <div class="p"><div class="dice">${[0,1,2].map(i=>`<div class="d" id="d${i}">${st=="bet"&&!res[0]?"?":dv[i]}</div>`).join("")}</div>
  ${S.pr?`<div style="margin-top:8px;font-size:14px">Предсказание: ${S.pr.join(" ")}</div>`:""}</div>
  ${show?`<div class="p ${win>0?"win":"lose"} big" style="color:${win>0?"#4c4":"#e55"}">${win>0?"Выигрыш: "+f(win):"Проигрыш: "+f(bet)}</div>`:""}
@@ -242,19 +390,44 @@ function main(){
  <div class="row"><button class="b s" onclick="coin()">${cd>0?"Ждите "+~~(cd/60)+":"+String(~~cd%60).padStart(2,"0"):"Заработать"}</button><button class="b s" onclick="modal='promo';main()">Промокод</button><button class="b s" onclick="openShop(0)">Магазин</button></div>
  ${gift?`<button class="b" style="background:#c8b432" onclick="claimGift()">🎁 Подарок</button>`:""}
  ${S.admin?`<button class="b g" onclick="scr='admin';render()">АДМИН</button>`:""}
- <div style="color:#ff0;font-size:18px">Дней: ${S.days} <span style="opacity:.4;font-size:11px">v8</span></div>
+ <div style="color:#ff0;font-size:18px">Дней: ${S.days} <span style="opacity:.4;font-size:11px">v14</span></div>
  <button class="b s g" onclick="logout()">Выйти (${esc(NICK)})</button>
+ ${modal=="bet"?`<div class="ov"><div class="p"><div class="big" style="color:#ffdc64">Ставка</div><div>Баланс: ${f(S.bal)}</div>
+ <input id="bi" inputmode="none" autocomplete="off" style="letter-spacing:2px;font-size:24px" value="${bet}" readonly>
+ <div class="kp" style="grid-template-columns:repeat(3,1fr);gap:6px">
+  ${"123456789".split("").map(k=>`<button class="b kk" onclick="kpBet('${k}')" style="padding:16px 0;font-size:22px">${k}</button>`).join("")}
+  <button class="b kk" onclick="kpBet('0')" style="padding:16px 0;font-size:22px">0</button>
+  <button class="b kk r" onclick="kpBet('⌫')" style="padding:16px 0;font-size:22px">⌫</button>
+  <button class="b kk g" onclick="kpBet('C')" style="padding:16px 0;font-size:22px">C</button>
+ </div>
+ <div class="row"><button class="b s" onclick="quickBet(100)">100</button><button class="b s" onclick="quickBet(1000)">1K</button><button class="b s" onclick="quickBet(10000)">10K</button><button class="b s" onclick="quickBet(100000)">100K</button></div>
+ <div class="row"><button class="b s" onclick="quickBet(${~~S.bal})">Всё (${f(S.bal)})</button></div>
+ <div class="row"><button class="b k" onclick="applyBet()">ОК</button><button class="b g" onclick="modal=null;main()">Отмена</button></div></div></div>`:""}
  ${modal=="loan"?`<div class="ov"><div class="p"><div class="big" style="color:#ffdc64">КРЕДИТ</div><div>${S.bal>0?"Баланс: "+f(S.bal):"Нужен кредит!"}</div><div class="row"><button class="b s" onclick="loan(1)">5% за спин</button><button class="b s" onclick="loan(2)">20% сразу</button></div>${S.debt>0?`<button class="b s g" onclick="modal=null;main()">Отказаться</button>`:""}</div></div>`:""}
  ${modal=="promo"?`<div class="ov"><div class="p"><div>Введите промокод:</div><input id="pi" inputmode="none" autocomplete="off" autocapitalize="characters" placeholder="код"><div class="kp">${"1234567890QWERTYUIOPASDFGHJKLZXCVBNM".split("").map(k=>`<button class="b kk" onclick="kp('${k}')">${k}</button>`).join("")}<button class="b kk r" onclick="kp('')">⌫</button></div><div class="row"><button class="b k" onclick="promo()">ОК</button><button class="b g" onclick="modal=null;main()">Отмена</button></div></div></div>`:""}
  ${modal=="reset"?`<div class="ov"><div class="p"><div class="big" style="color:#f66">Начать заново?</div><div>Баланс станет $1,000. Долг, покупки, рисунки и промокоды тоже сбросятся.</div><div class="row"><button class="b r" onclick="resetAll()">Сбросить</button><button class="b g" onclick="modal=null;main()">Отмена</button></div></div></div>`:""}`;
  hold($("#inc"),1);hold($("#dec"),-1);
  const pi=$("#pi");if(pi){pi.focus();pi.onkeydown=e=>e.key=="Enter"&&promo()}
+ const bi=$("#bi");if(bi){bi.oninput=()=>{bi.value=bi.value.replace(/[^\d]/g,"").slice(0,12)};bi.onkeydown=e=>e.key=="Enter"&&applyBet()}
 }
 function hold(el,d){if(!el)return;let t,i;const stop=()=>{clearTimeout(t);clearInterval(i)};
  el.onpointerdown=e=>{e.preventDefault();step(d);t=setTimeout(()=>i=setInterval(()=>step(d),100),500)};
  el.onpointerup=el.onpointerleave=el.onpointercancel=stop}
-function step(d){if(st!="bet"||S.bal<=0)return;if(d>0){bet=S.bal>=bet+50?bet+50:~~S.bal}else if(bet>50)bet-=50;$("#bet").textContent="Ставка: "+f(bet)}
-function setBet(m){if(st!="bet")return;bet=m?~~S.bal:(S.bal>=100?100:~~S.bal);$("#bet").textContent="Ставка: "+f(bet)}
+function step(d){if(st!="bet"||S.bal<=0)return;if(d>0){bet=S.bal>=bet+1?bet+1:~~S.bal}else if(bet>1)bet-=1;$("#bet").textContent="Ставка: "+f(bet)+" ✎"}
+function setBet(m){if(st!="bet")return;bet=m?~~S.bal:(S.bal>=100?100:~~S.bal);$("#bet").textContent="Ставка: "+f(bet)+" ✎"}
+function openBet(){if(st!="bet")return;modal="bet";main()}
+function kpBet(k){const i=$("#bi");if(!i)return;let v=i.value||"";
+ if(k==="⌫")v=v.slice(0,-1);
+ else if(k==="C")v="";
+ else{v=(v==="0"?"":v)+k;v=v.slice(0,12)}
+ i.value=v;
+}
+function quickBet(n){const i=$("#bi");if(!i)return;const cap=Math.max(1,~~S.bal);i.value=String(Math.min(Math.max(1,Math.floor(n)||1),cap))}
+function applyBet(){const el=$("#bi");const raw=el?el.value.replace(/[^\d]/g,""):"";
+ let n=raw!==""?Math.floor(+raw):bet;
+ if(!isFinite(n)||n<1)n=1;
+ const cap=Math.max(1,~~S.bal);
+ bet=Math.min(n,cap);modal=null;main()}
 function spin(){
  if(st!="bet")return;if(S.bal<=0){modal="loan";main();return}
  if(S.bal<bet)bet=~~S.bal;S.bal-=bet;st="roll";hl=null;
@@ -335,11 +508,9 @@ function drawScr(){
  <div class="row"><button class="b s" onclick="dz=1">· Тонко</button><button class="b s" onclick="dz=2">● Средне</button><button class="b s" onclick="dz=3">⬤ Толсто</button></div>
  <div class="row"><button class="b k" onclick="saveDraw()">💾 Сохранить${free?"":" (−$1,000,000)"}</button><button class="b g" onclick="scr='shop';render()">← Отмена</button></div>`;
  const c=$("#dc");dg=c.getContext("2d");clr();let dn=0;
- const pt=e=>{const r=c.getBoundingClientRect(),x=ri((e.clientX-r.left)/r.width*32),y=ri((e.clientY-r.top)/r.height*32);
-  if(dt=="fill"){dg.fillStyle=dc;dg.fillRect(0,0,32,32)}else{dg.fillStyle=dt=="eraser"?"#fff":dc;dg.fillRect(x,y,1,1)}};
- let lx=-1,ly=-1;
  const xy=e=>{const r=c.getBoundingClientRect();return[Math.max(0,Math.min(31,Math.floor((e.clientX-r.left)/r.width*32))),Math.max(0,Math.min(31,Math.floor((e.clientY-r.top)/r.height*32)))]};
  const dot=(x,y)=>{dg.fillStyle=dt=="eraser"?"#fff":dc;dg.fillRect(x,y,dz,dz)};
+ let lx=-1,ly=-1;
  const pt2=e=>{const[x,y]=xy(e);if(dt=="fill"){dg.fillStyle=dc;dg.fillRect(0,0,32,32);dn=0;return}
   if(lx<0)dot(x,y);else{const n=Math.max(Math.abs(x-lx),Math.abs(y-ly),1);for(let i=1;i<=n;i++)dot(Math.round(lx+(x-lx)*i/n),Math.round(ly+(y-ly)*i/n))}lx=x;ly=y};
  c.onpointerdown=e=>{e.preventDefault();c.setPointerCapture(e.pointerId);dn=1;lx=-1;pt2(e)};
@@ -367,13 +538,14 @@ function saveDraw(){if(!free&&S.bal<1e6){toast("Рисунок стоит $1,000
  save();apply();cat=dty;scr="shop";toast("✓ Создан «"+n+"»");render()}
 /* ---- админка ---- */
 function admin(){
+ adminModal=null;amVal="";
  $("#app").innerHTML=`<div class="p big" style="color:#f66">АДМИН-ПАНЕЛЬ</div><div class="p">Баланс: ${f(S.bal)} · Долг: ${f(S.debt)}</div>
  <button class="b" onclick="aBonus()">Бонус $3,000,000</button>
  <button class="b" onclick="aDebt()">Очистить долг</button>
  <button class="b" onclick="aPred()">Предсказание: ${S.pred?"ВКЛ":"ВЫКЛ"}</button>
  <button class="b" onclick="openShop(1)">Магазин: всё бесплатно</button>
  <button class="b" onclick="S.bal+=500;save();admin()">+500</button>
- <button class="b" style="background:#2a7a5a" onclick="scr='plr';render()">👥 Игроки и пароли</button>
+ <button class="b" style="background:#2a7a5a" onclick="scr='plr';render()">👥 Игроки</button>
  <button class="b" style="background:#643c96" onclick="scr='plist';render()">📋 Все промокоды</button>
  <button class="b g" onclick="scr='main';render()">Назад</button>`}
 function aBonus(){const r=86400-(T()-S.tB);if(r<=0){S.bal+=3e6;S.tB=T();save();toast("Получено $3,000,000!")}else toast(`Подожди ${~~(r/3600)}ч ${~~(r%3600/60)}м`);admin()}
@@ -392,8 +564,8 @@ function plist(){
 $("#app").innerHTML=`<div class="p">Загрузка…</div>`;apply();fx();
 (async()=>{
  try{const p=claude.use("db").then(d=>{DB=d||null});await Promise.race([p,new Promise(r=>setTimeout(r,3000))])}catch(e){}
- if(NICK){const id=hex(NICK),a=await getAcc(id);if(a&&!a.banned){login(id,a);return}if(a&&a.banned)aerr="Аккаунт заблокирован"}
- scr="auth";render()})();
+ try{localStorage.removeItem("depai_u")}catch(e){}
+ NICK="";ACC=null;AID="";modal=null;adminModal=null;st="bet";aerr="";scr="auth";adminUnlocked=false;render()})();
 setInterval(chk,20000);
 addEventListener("pagehide",()=>{save();cloud()});document.addEventListener("visibilitychange",()=>{if(document.hidden){save();cloud()}});
 setInterval(()=>{if(scr=="main"&&st=="bet"&&!modal&&!document.activeElement.matches("input")&&!S.admin)main()},30000);
